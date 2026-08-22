@@ -1,0 +1,5 @@
+Comparison,Baseline Mean,RAG Mean,Improvement (%),Wilcoxon Statistic,p-value,Significant (a=0.05),Cohen's d,Effect Size
+Baseline vs RAG (ROUGE-L),0.0879,0.3569,305.92,7472.0,1.19e-76,Yes,0.8136,Large
+Baseline vs RAG (Sem. Sim.),0.2557,0.4576,78.96,54456.5,6.49e-55,Yes,0.639,Medium
+SCE Flagged vs Consistent (ROUGE-L),0.1558,0.5507,N/A,31313.0,2.90e-55,Yes,1.3921,Large
+SCE Flagged vs Consistent (Sem. Sim.),0.2285,0.6785,N/A,15607.0,6.14e-90,Yes,1.993,Large

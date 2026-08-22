@@ -1,0 +1,9 @@
+{
+  "True Positives": 274,
+  "False Positives": 127,
+  "False Negatives": 98,
+  "True Negatives": 318,
+  "Precision": 0.6833,
+  "Recall": 0.7366,
+  "F1 Score": 0.7089
+}
