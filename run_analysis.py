@@ -1,35 +1,23 @@
-"""
-Comprehensive Thesis Analysis Script
-=====================================
-Computes all missing metrics, statistical tests, sensitivity analysis,
-category-level breakdown, and generates publication-quality figures.
-
-Output directory: results/analysis/
-"""
-
-import os
-import sys
 import json
+import os
 import warnings
+
+import matplotlib
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
 from scipy import stats
-from collections import defaultdict
+
+matplotlib.use("Agg")
 
 warnings.filterwarnings("ignore")
 
-# ─── Paths ──────────────────────────────────────────────────────────────────
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 RESULTS_DIR = os.path.join(PROJECT_ROOT, "results")
 OUTPUT_DIR = os.path.join(RESULTS_DIR, "analysis")
 FIGURES_DIR = os.path.join(OUTPUT_DIR, "figures")
 os.makedirs(FIGURES_DIR, exist_ok=True)
 
-# ─── Style ──────────────────────────────────────────────────────────────────
 plt.style.use("seaborn-v0_8-whitegrid")
 COLORS = {
     "Baseline LLM": "#e74c3c",
@@ -50,53 +38,31 @@ def log(msg):
     print(f"[ANALYSIS] {msg}")
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# PHASE 0 — Load Data
-# ═══════════════════════════════════════════════════════════════════════════
-log("Loading result CSVs...")
-baseline_df = pd.read_csv(os.path.join(RESULTS_DIR, "baseline_results.csv"))
-rag_df = pd.read_csv(os.path.join(RESULTS_DIR, "rag_results.csv"))
-sce_df = pd.read_csv(os.path.join(RESULTS_DIR, "sce_results.csv"))
+def load_data():
+    baseline_df = pd.read_csv(os.path.join(RESULTS_DIR, "baseline_results.csv"))
+    rag_df = pd.read_csv(os.path.join(RESULTS_DIR, "rag_results.csv"))
+    sce_df = pd.read_csv(os.path.join(RESULTS_DIR, "sce_results.csv"))
 
-log(f"  Baseline: {len(baseline_df)} rows, columns: {list(baseline_df.columns)}")
-log(f"  RAG:      {len(rag_df)} rows, columns: {list(rag_df.columns)}")
-log(f"  SCE:      {len(sce_df)} rows, columns: {list(sce_df.columns)}")
+    for df in (baseline_df, rag_df, sce_df):
+        for col in df.columns:
+            if df[col].dtype == object:
+                df[col] = df[col].fillna("")
 
-# Load TruthfulQA for categories
-log("Loading TruthfulQA dataset for categories...")
-try:
-    from datasets import load_dataset
-    tqa = load_dataset("truthfulqa/truthful_qa", "generation", split="validation")
-    tqa_df = tqa.to_pandas()[["question", "category", "type"]]
-    log(f"  TruthfulQA loaded: {len(tqa_df)} questions, {tqa_df['category'].nunique()} categories")
-    HAS_CATEGORIES = True
-except Exception as e:
-    log(f"  WARNING: Could not load TruthfulQA categories: {e}")
-    HAS_CATEGORIES = False
-    tqa_df = None
+    try:
+        from datasets import load_dataset
 
-# Fill NaN strings to avoid crashes
-for df in [baseline_df, rag_df, sce_df]:
-    for col in df.columns:
-        if df[col].dtype == object:
-            df[col] = df[col].fillna("")
+        tqa = load_dataset("truthfulqa/truthful_qa", "generation", split="validation")
+        tqa_df = tqa.to_pandas()[["question", "category", "type"]]
+        has_categories = True
+    except Exception as exc:
+        log(f"Warning: Could not load TruthfulQA categories: {exc}")
+        tqa_df = None
+        has_categories = False
 
-# ═══════════════════════════════════════════════════════════════════════════
-# PHASE 1 — Compute Missing Metrics
-# ═══════════════════════════════════════════════════════════════════════════
-log("Loading sentence-transformers for semantic similarity...")
-from sentence_transformers import SentenceTransformer, util
-
-embed_model = SentenceTransformer("all-MiniLM-L6-v2")
-
-log("Computing ROUGE scores...")
-from rouge_score import rouge_scorer
-
-scorer = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
+    return baseline_df, rag_df, sce_df, tqa_df, has_categories
 
 
-def compute_rouge(generated, reference):
-    """Compute ROUGE-1, ROUGE-2, ROUGE-L F1 scores."""
+def compute_rouge(generated, reference, scorer):
     scores = scorer.score(str(reference), str(generated))
     return {
         "rouge1_f": scores["rouge1"].fmeasure,
@@ -105,93 +71,19 @@ def compute_rouge(generated, reference):
     }
 
 
-def compute_semantic_similarity(texts_a, texts_b, batch_size=64):
-    """Compute pairwise cosine similarity between two lists of texts."""
-    log(f"  Encoding {len(texts_a)} text pairs...")
-    embeddings_a = embed_model.encode(texts_a, batch_size=batch_size, show_progress_bar=True)
-    embeddings_b = embed_model.encode(texts_b, batch_size=batch_size, show_progress_bar=True)
+def compute_semantic_similarity(texts_a, texts_b, embed_model):
+    from sentence_transformers import util
+
+    embeddings_a = embed_model.encode(texts_a, batch_size=64, show_progress_bar=True)
+    embeddings_b = embed_model.encode(texts_b, batch_size=64, show_progress_bar=True)
+
     similarities = []
     for ea, eb in zip(embeddings_a, embeddings_b):
-        sim = float(util.cos_sim(ea, eb)[0][0])
-        similarities.append(sim)
+        similarities.append(float(util.cos_sim(ea, eb)[0][0]))
     return similarities
 
 
-# ── 1a. Baseline: ROUGE scores vs best_answer ─────────────────────────────
-log("Computing Baseline ROUGE scores...")
-baseline_rouge = []
-for _, row in baseline_df.iterrows():
-    r = compute_rouge(str(row["generated_answer"]), str(row["best_answer"]))
-    baseline_rouge.append(r)
-
-baseline_df["rouge1_f"] = [r["rouge1_f"] for r in baseline_rouge]
-baseline_df["rouge2_f"] = [r["rouge2_f"] for r in baseline_rouge]
-baseline_df["rougeL_f"] = [r["rougeL_f"] for r in baseline_rouge]
-
-# ── 1b. Baseline: Semantic similarity to best_answer ──────────────────────
-log("Computing Baseline semantic similarity to best_answer...")
-baseline_df["sem_sim_to_answer"] = compute_semantic_similarity(
-    baseline_df["generated_answer"].astype(str).tolist(),
-    baseline_df["best_answer"].astype(str).tolist()
-)
-
-# ── 1c. RAG: ROUGE scores vs best_answer ──────────────────────────────────
-log("Computing RAG ROUGE scores...")
-rag_rouge = []
-for _, row in rag_df.iterrows():
-    r = compute_rouge(str(row["generated_answer"]), str(row["best_answer"]))
-    rag_rouge.append(r)
-
-rag_df["rouge1_f"] = [r["rouge1_f"] for r in rag_rouge]
-rag_df["rouge2_f"] = [r["rouge2_f"] for r in rag_rouge]
-rag_df["rougeL_f"] = [r["rougeL_f"] for r in rag_rouge]
-
-# ── 1d. RAG: Semantic similarity to best_answer ──────────────────────────
-log("Computing RAG semantic similarity to best_answer...")
-rag_df["sem_sim_to_answer"] = compute_semantic_similarity(
-    rag_df["generated_answer"].astype(str).tolist(),
-    rag_df["best_answer"].astype(str).tolist()
-)
-
-# ── 1e. RAG: SCE score (answer ↔ context) ────────────────────────────────
-log("Computing RAG SCE scores (answer vs retrieved context)...")
-rag_df["sce_score"] = compute_semantic_similarity(
-    rag_df["generated_answer"].astype(str).tolist(),
-    rag_df["retrieved_context"].astype(str).tolist()
-)
-
-# ── 1f. SCE df: ROUGE scores vs best_answer ──────────────────────────────
-# SCE df doesn't have best_answer, merge from RAG
-log("Computing SCE ROUGE scores and semantic similarity to best_answer...")
-sce_df["best_answer"] = rag_df["best_answer"].values
-
-sce_rouge = []
-for _, row in sce_df.iterrows():
-    r = compute_rouge(str(row["generated_answer"]), str(row.get("best_answer", "")))
-    sce_rouge.append(r)
-
-sce_df["rouge1_f"] = [r["rouge1_f"] for r in sce_rouge]
-sce_df["rouge2_f"] = [r["rouge2_f"] for r in sce_rouge]
-sce_df["rougeL_f"] = [r["rougeL_f"] for r in sce_rouge]
-
-sce_df["sem_sim_to_answer"] = compute_semantic_similarity(
-    sce_df["generated_answer"].astype(str).tolist(),
-    sce_df["best_answer"].astype(str).tolist()
-)
-
-# ── 1g. Answer length ────────────────────────────────────────────────────
-baseline_df["answer_length"] = baseline_df["generated_answer"].astype(str).str.len()
-rag_df["answer_length"] = rag_df["generated_answer"].astype(str).str.len()
-sce_df["answer_length"] = sce_df["generated_answer"].astype(str).str.len()
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# PHASE 2 — Summary Statistics & Comparison Table
-# ═══════════════════════════════════════════════════════════════════════════
-log("Building summary comparison table...")
-
 def make_summary(label, df, has_sce=False):
-    """Create summary dict for a condition."""
     summary = {
         "Condition": label,
         "N": len(df),
@@ -201,6 +93,7 @@ def make_summary(label, df, has_sce=False):
         "ROUGE-L F1": round(df["rougeL_f"].mean(), 4),
         "Sem. Sim. to Ground Truth": round(df["sem_sim_to_answer"].mean(), 4),
     }
+
     if has_sce:
         sce_col = "sce_score" if "sce_score" in df.columns else "semantic_similarity_score"
         summary["Avg SCE Score"] = round(df[sce_col].mean(), 4)
@@ -210,319 +103,284 @@ def make_summary(label, df, has_sce=False):
     return summary
 
 
-summaries = [
-    make_summary("Baseline LLM", baseline_df, has_sce=False),
-    make_summary("RAG", rag_df, has_sce=True),
-    make_summary("RAG + SCE", sce_df, has_sce=True),
-]
-
-summary_df = pd.DataFrame(summaries)
-summary_df.to_csv(os.path.join(OUTPUT_DIR, "full_comparison_table.csv"), index=False)
-log("  Saved: full_comparison_table.csv")
-
-print("\n" + "="*80)
-print("COMPLETE CROSS-CONDITION COMPARISON TABLE")
-print("="*80)
-print(summary_df.to_string(index=False))
-print()
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# PHASE 3 — Statistical Significance Tests
-# ═══════════════════════════════════════════════════════════════════════════
-log("Running statistical significance tests...")
-
-stat_results = []
-
-# Wilcoxon signed-rank test: Baseline vs RAG (paired)
-for metric, col in [("ROUGE-L", "rougeL_f"), ("Sem. Sim.", "sem_sim_to_answer")]:
-    baseline_vals = baseline_df[col].values
-    rag_vals = rag_df[col].values
-    
-    stat_w, p_w = stats.wilcoxon(baseline_vals, rag_vals, alternative="two-sided")
-    
-    diff = rag_vals - baseline_vals
-    cohens_d = diff.mean() / diff.std() if diff.std() > 0 else 0
-    
-    improvement = ((rag_vals.mean() - baseline_vals.mean()) / baseline_vals.mean() * 100
-                   if baseline_vals.mean() != 0 else float('inf'))
-    
-    stat_results.append({
-        "Comparison": f"Baseline vs RAG ({metric})",
-        "Baseline Mean": round(baseline_vals.mean(), 4),
-        "RAG Mean": round(rag_vals.mean(), 4),
-        "Improvement (%)": round(improvement, 2),
-        "Wilcoxon Statistic": round(stat_w, 2),
-        "p-value": f"{p_w:.2e}",
-        "Significant (a=0.05)": "Yes" if p_w < 0.05 else "No",
-        "Cohen's d": round(cohens_d, 4),
-        "Effect Size": "Large" if abs(cohens_d) >= 0.8 else "Medium" if abs(cohens_d) >= 0.5 else "Small",
-    })
-
-# Mann-Whitney U: SCE flagged vs consistent
-flagged_mask = sce_df["hallucination_flag"] == 1
-not_flagged_mask = sce_df["hallucination_flag"] == 0
-
-for metric, col in [("ROUGE-L", "rougeL_f"), ("Sem. Sim.", "sem_sim_to_answer")]:
-    flagged_vals = sce_df.loc[flagged_mask, col].values
-    consistent_vals = sce_df.loc[not_flagged_mask, col].values
-    
-    stat_mw, p_mw = stats.mannwhitneyu(flagged_vals, consistent_vals, alternative="two-sided")
-    
-    pooled_std = np.sqrt((flagged_vals.std()**2 + consistent_vals.std()**2) / 2)
-    d = (consistent_vals.mean() - flagged_vals.mean()) / pooled_std if pooled_std > 0 else 0
-    
-    stat_results.append({
-        "Comparison": f"SCE Flagged vs Consistent ({metric})",
-        "Baseline Mean": round(flagged_vals.mean(), 4),
-        "RAG Mean": round(consistent_vals.mean(), 4),
-        "Improvement (%)": "N/A",
-        "Wilcoxon Statistic": round(stat_mw, 2),
-        "p-value": f"{p_mw:.2e}",
-        "Significant (a=0.05)": "Yes" if p_mw < 0.05 else "No",
-        "Cohen's d": round(d, 4),
-        "Effect Size": "Large" if abs(d) >= 0.8 else "Medium" if abs(d) >= 0.5 else "Small",
-    })
-
-stat_df = pd.DataFrame(stat_results)
-stat_df.to_csv(os.path.join(OUTPUT_DIR, "statistical_tests.csv"), index=False)
-log("  Saved: statistical_tests.csv")
-
-print("\n" + "="*80)
-print("STATISTICAL SIGNIFICANCE TESTS")
-print("="*80)
-print(stat_df.to_string(index=False))
-print()
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# PHASE 4 — Bootstrap Confidence Intervals
-# ═══════════════════════════════════════════════════════════════════════════
-log("Computing bootstrap 95% confidence intervals...")
-
 def bootstrap_ci(data, n_boot=5000, ci=0.95):
     rng = np.random.default_rng(42)
     boot_means = []
     for _ in range(n_boot):
         sample = rng.choice(data, size=len(data), replace=True)
         boot_means.append(np.mean(sample))
+
     alpha = (1 - ci) / 2
     lower = np.percentile(boot_means, alpha * 100)
     upper = np.percentile(boot_means, (1 - alpha) * 100)
     return round(lower, 4), round(upper, 4)
 
 
-ci_results = []
-for label, df in [("Baseline LLM", baseline_df), ("RAG", rag_df), ("RAG + SCE", sce_df)]:
+def main():
+    baseline_df, rag_df, sce_df, tqa_df, has_categories = load_data()
+
+    log("Loading sentence-transformers for semantic similarity...")
+    from sentence_transformers import SentenceTransformer
+
+    embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+
+    log("Computing ROUGE scores...")
+    from rouge_score import rouge_scorer
+
+    scorer = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
+
+    for df in (baseline_df, rag_df):
+        for _, row in df.iterrows():
+            rouge = compute_rouge(row["generated_answer"], row["best_answer"], scorer)
+            df.loc[_, ["rouge1_f", "rouge2_f", "rougeL_f"]] = (
+                rouge["rouge1_f"],
+                rouge["rouge2_f"],
+                rouge["rougeL_f"],
+            )
+
+    for df in (baseline_df, rag_df):
+        df["sem_sim_to_answer"] = compute_semantic_similarity(
+            df["generated_answer"].astype(str).tolist(),
+            df["best_answer"].astype(str).tolist(),
+            embed_model,
+        )
+
+    rag_df["sce_score"] = compute_semantic_similarity(
+        rag_df["generated_answer"].astype(str).tolist(),
+        rag_df["retrieved_context"].astype(str).tolist(),
+        embed_model,
+    )
+
+    sce_df["best_answer"] = rag_df["best_answer"].values
+    sce_rouge = []
+    for _, row in sce_df.iterrows():
+        sce_rouge.append(compute_rouge(row["generated_answer"], row["best_answer"], scorer))
+
+    sce_df["rouge1_f"] = [r["rouge1_f"] for r in sce_rouge]
+    sce_df["rouge2_f"] = [r["rouge2_f"] for r in sce_rouge]
+    sce_df["rougeL_f"] = [r["rougeL_f"] for r in sce_rouge]
+    sce_df["sem_sim_to_answer"] = compute_semantic_similarity(
+        sce_df["generated_answer"].astype(str).tolist(),
+        sce_df["best_answer"].astype(str).tolist(),
+        embed_model,
+    )
+
+    for df in (baseline_df, rag_df, sce_df):
+        df["answer_length"] = df["generated_answer"].astype(str).str.len()
+
+    summaries = [
+        make_summary("Baseline LLM", baseline_df),
+        make_summary("RAG", rag_df, has_sce=True),
+        make_summary("RAG + SCE", sce_df, has_sce=True),
+    ]
+
+    summary_df = pd.DataFrame(summaries)
+    summary_df.to_csv(os.path.join(OUTPUT_DIR, "full_comparison_table.csv"), index=False)
+    print(summary_df.to_string(index=False))
+
+    stat_results = []
     for metric, col in [("ROUGE-L", "rougeL_f"), ("Sem. Sim.", "sem_sim_to_answer")]:
-        lo, hi = bootstrap_ci(df[col].values)
-        ci_results.append({
-            "Condition": label,
-            "Metric": metric,
-            "Mean": round(df[col].mean(), 4),
-            "95% CI Lower": lo,
-            "95% CI Upper": hi,
+        baseline_vals = baseline_df[col].values
+        rag_vals = rag_df[col].values
+
+        stat_w, p_w = stats.wilcoxon(baseline_vals, rag_vals, alternative="two-sided")
+        diff = rag_vals - baseline_vals
+        cohens_d = diff.mean() / diff.std() if diff.std() > 0 else 0
+        improvement = (
+            (rag_vals.mean() - baseline_vals.mean()) / baseline_vals.mean() * 100
+            if baseline_vals.mean() != 0
+            else float("inf")
+        )
+
+        stat_results.append({
+            "Comparison": f"Baseline vs RAG ({metric})",
+            "Baseline Mean": round(baseline_vals.mean(), 4),
+            "RAG Mean": round(rag_vals.mean(), 4),
+            "Improvement (%)": round(improvement, 2),
+            "Wilcoxon Statistic": round(stat_w, 2),
+            "p-value": f"{p_w:.2e}",
+            "Significant (a=0.05)": "Yes" if p_w < 0.05 else "No",
+            "Cohen's d": round(cohens_d, 4),
+            "Effect Size": "Large" if abs(cohens_d) >= 0.8 else "Medium" if abs(cohens_d) >= 0.5 else "Small",
         })
 
-ci_df = pd.DataFrame(ci_results)
-ci_df.to_csv(os.path.join(OUTPUT_DIR, "confidence_intervals.csv"), index=False)
-log("  Saved: confidence_intervals.csv")
+    flagged_mask = sce_df["hallucination_flag"] == 1
+    not_flagged_mask = sce_df["hallucination_flag"] == 0
 
-print("\n" + "="*80)
-print("BOOTSTRAP 95% CONFIDENCE INTERVALS")
-print("="*80)
-print(ci_df.to_string(index=False))
-print()
+    for metric, col in [("ROUGE-L", "rougeL_f"), ("Sem. Sim.", "sem_sim_to_answer")]:
+        flagged_vals = sce_df.loc[flagged_mask, col].values
+        consistent_vals = sce_df.loc[not_flagged_mask, col].values
 
+        stat_mw, p_mw = stats.mannwhitneyu(flagged_vals, consistent_vals, alternative="two-sided")
+        pooled_std = np.sqrt((flagged_vals.std() ** 2 + consistent_vals.std() ** 2) / 2)
+        d = (consistent_vals.mean() - flagged_vals.mean()) / pooled_std if pooled_std > 0 else 0
 
-# ═══════════════════════════════════════════════════════════════════════════
-# PHASE 5 — Sensitivity Analysis
-# ═══════════════════════════════════════════════════════════════════════════
-log("Running SCE threshold sensitivity analysis...")
-
-thresholds = np.arange(0.05, 1.0, 0.05)
-sce_col = "semantic_similarity_score"
-
-sensitivity_data = []
-for t in thresholds:
-    flagged = (sce_df[sce_col] < t).sum()
-    total = len(sce_df)
-    rate = flagged / total * 100
-    
-    flagged_mask_t = sce_df[sce_col] < t
-    if flagged_mask_t.sum() > 0:
-        avg_rouge_flagged = sce_df.loc[flagged_mask_t, "rougeL_f"].mean()
-        avg_rouge_consistent = sce_df.loc[~flagged_mask_t, "rougeL_f"].mean() if (~flagged_mask_t).sum() > 0 else 0
-    else:
-        avg_rouge_flagged = 0
-        avg_rouge_consistent = sce_df["rougeL_f"].mean()
-    
-    sensitivity_data.append({
-        "Threshold": round(t, 2),
-        "Flagged Count": flagged,
-        "Hallucination Rate (%)": round(rate, 2),
-        "Avg ROUGE-L (Flagged)": round(avg_rouge_flagged, 4),
-        "Avg ROUGE-L (Consistent)": round(avg_rouge_consistent, 4),
-    })
-
-sensitivity_df = pd.DataFrame(sensitivity_data)
-sensitivity_df.to_csv(os.path.join(OUTPUT_DIR, "threshold_sensitivity.csv"), index=False)
-log("  Saved: threshold_sensitivity.csv")
-
-print("\n" + "="*80)
-print("SCE THRESHOLD SENSITIVITY ANALYSIS")
-print("="*80)
-print(sensitivity_df.to_string(index=False))
-print()
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# PHASE 6 — Category-Level Breakdown
-# ═══════════════════════════════════════════════════════════════════════════
-if HAS_CATEGORIES:
-    log("Computing category-level breakdown...")
-    
-    baseline_df["category"] = tqa_df["category"].values
-    rag_df["category"] = tqa_df["category"].values
-    sce_df["category"] = tqa_df["category"].values
-    
-    cat_data = []
-    for cat in sorted(tqa_df["category"].unique()):
-        b_mask = baseline_df["category"] == cat
-        r_mask = rag_df["category"] == cat
-        s_mask = sce_df["category"] == cat
-        
-        cat_data.append({
-            "Category": cat,
-            "Count": b_mask.sum(),
-            "Baseline ROUGE-L": round(baseline_df.loc[b_mask, "rougeL_f"].mean(), 4),
-            "RAG ROUGE-L": round(rag_df.loc[r_mask, "rougeL_f"].mean(), 4),
-            "ROUGE-L Improvement": round(
-                (rag_df.loc[r_mask, "rougeL_f"].mean() - baseline_df.loc[b_mask, "rougeL_f"].mean()), 4
-            ),
-            "Baseline Sem. Sim.": round(baseline_df.loc[b_mask, "sem_sim_to_answer"].mean(), 4),
-            "RAG Sem. Sim.": round(rag_df.loc[r_mask, "sem_sim_to_answer"].mean(), 4),
-            "Avg SCE Score": round(sce_df.loc[s_mask, "semantic_similarity_score"].mean(), 4),
-            "Halluc. Rate (%)": round(
-                (sce_df.loc[s_mask, "hallucination_flag"].mean()) * 100, 2
-            ),
+        stat_results.append({
+            "Comparison": f"SCE Flagged vs Consistent ({metric})",
+            "Baseline Mean": round(flagged_vals.mean(), 4),
+            "RAG Mean": round(consistent_vals.mean(), 4),
+            "Improvement (%)": "N/A",
+            "Wilcoxon Statistic": round(stat_mw, 2),
+            "p-value": f"{p_mw:.2e}",
+            "Significant (a=0.05)": "Yes" if p_mw < 0.05 else "No",
+            "Cohen's d": round(d, 4),
+            "Effect Size": "Large" if abs(d) >= 0.8 else "Medium" if abs(d) >= 0.5 else "Small",
         })
-    
-    cat_df = pd.DataFrame(cat_data).sort_values("Halluc. Rate (%)", ascending=False)
-    cat_df.to_csv(os.path.join(OUTPUT_DIR, "category_breakdown.csv"), index=False)
-    log("  Saved: category_breakdown.csv")
-    
-    print("\n" + "="*80)
-    print("CATEGORY-LEVEL BREAKDOWN")
-    print("="*80)
-    print(cat_df.to_string(index=False))
-    print()
+
+    stat_df = pd.DataFrame(stat_results)
+    stat_df.to_csv(os.path.join(OUTPUT_DIR, "statistical_tests.csv"), index=False)
+
+    ci_results = []
+    for label, df in [("Baseline LLM", baseline_df), ("RAG", rag_df), ("RAG + SCE", sce_df)]:
+        for metric, col in [("ROUGE-L", "rougeL_f"), ("Sem. Sim.", "sem_sim_to_answer")]:
+            lo, hi = bootstrap_ci(df[col].values)
+            ci_results.append({
+                "Condition": label,
+                "Metric": metric,
+                "Mean": round(df[col].mean(), 4),
+                "95% CI Lower": lo,
+                "95% CI Upper": hi,
+            })
+
+    ci_df = pd.DataFrame(ci_results)
+    ci_df.to_csv(os.path.join(OUTPUT_DIR, "confidence_intervals.csv"), index=False)
+
+    thresholds = np.arange(0.05, 1.0, 0.05)
+    sensitivity_data = []
+    for threshold in thresholds:
+        flagged_mask = sce_df["semantic_similarity_score"] < threshold
+        flagged_count = int(flagged_mask.sum())
+        avg_rouge_flagged = sce_df.loc[flagged_mask, "rougeL_f"].mean() if flagged_count > 0 else 0
+        avg_rouge_consistent = sce_df.loc[~flagged_mask, "rougeL_f"].mean() if (len(sce_df) - flagged_count) > 0 else 0
+
+        sensitivity_data.append({
+            "Threshold": round(threshold, 2),
+            "Flagged Count": flagged_count,
+            "Hallucination Rate (%)": round((flagged_count / len(sce_df)) * 100, 2),
+            "Avg ROUGE-L (Flagged)": round(avg_rouge_flagged, 4),
+            "Avg ROUGE-L (Consistent)": round(avg_rouge_consistent, 4),
+        })
+
+    sensitivity_df = pd.DataFrame(sensitivity_data)
+    sensitivity_df.to_csv(os.path.join(OUTPUT_DIR, "threshold_sensitivity.csv"), index=False)
+
+    if has_categories:
+        baseline_df["category"] = tqa_df["category"].values
+        rag_df["category"] = tqa_df["category"].values
+        sce_df["category"] = tqa_df["category"].values
+
+        cat_data = []
+        for cat in sorted(tqa_df["category"].unique()):
+            b_mask = baseline_df["category"] == cat
+            r_mask = rag_df["category"] == cat
+            s_mask = sce_df["category"] == cat
+
+            cat_data.append({
+                "Category": cat,
+                "Count": b_mask.sum(),
+                "Baseline ROUGE-L": round(baseline_df.loc[b_mask, "rougeL_f"].mean(), 4),
+                "RAG ROUGE-L": round(rag_df.loc[r_mask, "rougeL_f"].mean(), 4),
+                "ROUGE-L Improvement": round(rag_df.loc[r_mask, "rougeL_f"].mean() - baseline_df.loc[b_mask, "rougeL_f"].mean(), 4),
+                "Baseline Sem. Sim.": round(baseline_df.loc[b_mask, "sem_sim_to_answer"].mean(), 4),
+                "RAG Sem. Sim.": round(rag_df.loc[r_mask, "sem_sim_to_answer"].mean(), 4),
+                "Avg SCE Score": round(sce_df.loc[s_mask, "semantic_similarity_score"].mean(), 4),
+                "Halluc. Rate (%)": round(sce_df.loc[s_mask, "hallucination_flag"].mean() * 100, 2),
+            })
+
+        cat_df = pd.DataFrame(cat_data).sort_values("Halluc. Rate (%)", ascending=False)
+        cat_df.to_csv(os.path.join(OUTPUT_DIR, "category_breakdown.csv"), index=False)
+
+    sce_failures = sce_df[sce_df["hallucination_flag"] == 1].copy()
+    sce_failures = sce_failures.sort_values("rougeL_f", ascending=True).head(20)
+    sce_failures_out = sce_failures[[
+        "question",
+        "retrieved_context",
+        "generated_answer",
+        "best_answer",
+        "semantic_similarity_score",
+        "rougeL_f",
+    ]].copy()
+    sce_failures_out.columns = [
+        "Question",
+        "Retrieved Context",
+        "Generated Answer",
+        "Best Answer",
+        "SCE Score",
+        "ROUGE-L",
+    ]
+    sce_failures_out.to_csv(os.path.join(OUTPUT_DIR, "worst_failures.csv"), index=False)
+
+    low_rouge_mask = sce_df["rougeL_f"] < 0.2
+    tp = int((low_rouge_mask & (sce_df["hallucination_flag"] == 1)).sum())
+    fp = int((~low_rouge_mask & (sce_df["hallucination_flag"] == 1)).sum())
+    fn = int((low_rouge_mask & (sce_df["hallucination_flag"] == 0)).sum())
+    tn = int((~low_rouge_mask & (sce_df["hallucination_flag"] == 0)).sum())
+
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+
+    sce_classifier_stats = {
+        "True Positives": tp,
+        "False Positives": fp,
+        "False Negatives": fn,
+        "True Negatives": tn,
+        "Precision": round(precision, 4),
+        "Recall": round(recall, 4),
+        "F1 Score": round(f1, 4),
+    }
+
+    with open(os.path.join(OUTPUT_DIR, "sce_classifier_stats.json"), "w") as f:
+        json.dump(sce_classifier_stats, f, indent=2)
+
+    fig, axes = plt.subplots(1, 3, figsize=(14, 5))
+    conditions = ["Baseline LLM", "RAG", "RAG + SCE"]
+    metrics_to_plot = [
+        ("ROUGE-L F1", [baseline_df["rougeL_f"].mean(), rag_df["rougeL_f"].mean(), sce_df["rougeL_f"].mean()]),
+        ("Semantic Sim. to Ground Truth", [baseline_df["sem_sim_to_answer"].mean(), rag_df["sem_sim_to_answer"].mean(), sce_df["sem_sim_to_answer"].mean()]),
+        ("ROUGE-1 F1", [baseline_df["rouge1_f"].mean(), rag_df["rouge1_f"].mean(), sce_df["rouge1_f"].mean()]),
+    ]
+
+    for ax, (metric_name, values) in zip(axes, metrics_to_plot):
+        bars = ax.bar(conditions, values, color=[COLORS[c] for c in conditions], edgecolor="white", linewidth=1.5)
+        ax.set_title(metric_name, fontweight="bold")
+        ax.set_ylim(0, max(values) * 1.3)
+        for bar, val in zip(bars, values):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01, f"{val:.3f}", ha="center", va="bottom", fontsize=10, fontweight="bold")
+        ax.tick_params(axis="x", rotation=15)
+
+    plt.suptitle("Cross-Condition Metric Comparison (TruthfulQA, N=817)", fontsize=14, fontweight="bold", y=1.02)
+    plt.tight_layout()
+    plt.savefig(os.path.join(FIGURES_DIR, "fig1_metrics_comparison.png"), bbox_inches="tight")
+    plt.close()
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    data_rouge = [baseline_df["rougeL_f"].values, rag_df["rougeL_f"].values, sce_df["rougeL_f"].values]
+    bp1 = axes[0].boxplot(data_rouge, labels=conditions, patch_artist=True, showfliers=False, medianprops={"color": "black", "linewidth": 2})
+    for patch, c in zip(bp1["boxes"], [COLORS[c] for c in conditions]):
+        patch.set_facecolor(c)
+        patch.set_alpha(0.7)
+    axes[0].set_title("ROUGE-L F1 Distribution", fontweight="bold")
+    axes[0].set_ylabel("ROUGE-L F1 Score")
+
+    data_sem = [baseline_df["sem_sim_to_answer"].values, rag_df["sem_sim_to_answer"].values, sce_df["sem_sim_to_answer"].values]
+    bp2 = axes[1].boxplot(data_sem, labels=conditions, patch_artist=True, showfliers=False, medianprops={"color": "black", "linewidth": 2})
+    for patch, c in zip(bp2["boxes"], [COLORS[c] for c in conditions]):
+        patch.set_facecolor(c)
+        patch.set_alpha(0.7)
+    axes[1].set_title("Semantic Similarity to Ground Truth", fontweight="bold")
+    axes[1].set_ylabel("Cosine Similarity")
+
+    plt.suptitle("Score Distributions Across Conditions", fontsize=14, fontweight="bold", y=1.02)
+    plt.tight_layout()
+    plt.savefig(os.path.join(FIGURES_DIR, "fig2_box_distributions.png"), bbox_inches="tight")
+    plt.close()
+
+    log("Analysis finished.")
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# PHASE 7 — Failure Case Analysis
-# ═══════════════════════════════════════════════════════════════════════════
-log("Identifying failure cases...")
-
-sce_failures = sce_df[sce_df["hallucination_flag"] == 1].copy()
-sce_failures = sce_failures.sort_values("rougeL_f", ascending=True).head(20)
-sce_failures_out = sce_failures[["question", "retrieved_context", "generated_answer",
-                                  "best_answer", "semantic_similarity_score", "rougeL_f"]].copy()
-sce_failures_out.columns = ["Question", "Retrieved Context", "Generated Answer",
-                             "Best Answer", "SCE Score", "ROUGE-L"]
-sce_failures_out.to_csv(os.path.join(OUTPUT_DIR, "worst_failures.csv"), index=False)
-log("  Saved: worst_failures.csv")
-
-# SCE as classifier: using ROUGE-L < 0.2 as proxy ground truth
-low_rouge_mask = sce_df["rougeL_f"] < 0.2
-tp = int((low_rouge_mask & (sce_df["hallucination_flag"] == 1)).sum())
-fp = int((~low_rouge_mask & (sce_df["hallucination_flag"] == 1)).sum())
-fn = int((low_rouge_mask & (sce_df["hallucination_flag"] == 0)).sum())
-tn = int((~low_rouge_mask & (sce_df["hallucination_flag"] == 0)).sum())
-
-precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
-
-sce_classifier_stats = {
-    "True Positives": tp,
-    "False Positives": fp,
-    "False Negatives": fn,
-    "True Negatives": tn,
-    "Precision": round(precision, 4),
-    "Recall": round(recall, 4),
-    "F1 Score": round(f1, 4),
-}
-
-print("\n" + "="*80)
-print("SCE AS HALLUCINATION DETECTOR (proxy ground truth: ROUGE-L < 0.2)")
-print("="*80)
-for k, v in sce_classifier_stats.items():
-    print(f"  {k}: {v}")
-print()
-
-with open(os.path.join(OUTPUT_DIR, "sce_classifier_stats.json"), "w") as f:
-    json.dump(sce_classifier_stats, f, indent=2)
-log("  Saved: sce_classifier_stats.json")
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# PHASE 8 — Figures
-# ═══════════════════════════════════════════════════════════════════════════
-log("Generating figures...")
-
-# ── Figure 1: Metrics Comparison Bar Chart ────────────────────────────────
-fig, axes = plt.subplots(1, 3, figsize=(14, 5))
-
-metrics_to_plot = [
-    ("ROUGE-L F1", [baseline_df["rougeL_f"].mean(), rag_df["rougeL_f"].mean(), sce_df["rougeL_f"].mean()]),
-    ("Semantic Sim. to Ground Truth", [baseline_df["sem_sim_to_answer"].mean(), rag_df["sem_sim_to_answer"].mean(), sce_df["sem_sim_to_answer"].mean()]),
-    ("ROUGE-1 F1", [baseline_df["rouge1_f"].mean(), rag_df["rouge1_f"].mean(), sce_df["rouge1_f"].mean()]),
-]
-
-conditions = ["Baseline LLM", "RAG", "RAG + SCE"]
-for ax, (metric_name, values) in zip(axes, metrics_to_plot):
-    bars = ax.bar(conditions, values, color=[COLORS[c] for c in conditions], edgecolor="white", linewidth=1.5)
-    ax.set_title(metric_name, fontweight="bold")
-    ax.set_ylim(0, max(values) * 1.3)
-    for bar, val in zip(bars, values):
-        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
-                f"{val:.3f}", ha="center", va="bottom", fontsize=10, fontweight="bold")
-    ax.tick_params(axis='x', rotation=15)
-
-plt.suptitle("Cross-Condition Metric Comparison (TruthfulQA, N=817)", fontsize=14, fontweight="bold", y=1.02)
-plt.tight_layout()
-plt.savefig(os.path.join(FIGURES_DIR, "fig1_metrics_comparison.png"), bbox_inches="tight")
-plt.close()
-log("  Saved: fig1_metrics_comparison.png")
-
-
-# ── Figure 2: Box Plot of Score Distributions ────────────────────────────
-fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-
-data_rouge = [baseline_df["rougeL_f"].values, rag_df["rougeL_f"].values, sce_df["rougeL_f"].values]
-bp1 = axes[0].boxplot(data_rouge, labels=conditions, patch_artist=True, showfliers=False,
-                       medianprops=dict(color="black", linewidth=2))
-for patch, c in zip(bp1["boxes"], [COLORS[c] for c in conditions]):
-    patch.set_facecolor(c)
-    patch.set_alpha(0.7)
-axes[0].set_title("ROUGE-L F1 Distribution", fontweight="bold")
-axes[0].set_ylabel("ROUGE-L F1 Score")
-
-data_sem = [baseline_df["sem_sim_to_answer"].values, rag_df["sem_sim_to_answer"].values, sce_df["sem_sim_to_answer"].values]
-bp2 = axes[1].boxplot(data_sem, labels=conditions, patch_artist=True, showfliers=False,
-                       medianprops=dict(color="black", linewidth=2))
-for patch, c in zip(bp2["boxes"], [COLORS[c] for c in conditions]):
-    patch.set_facecolor(c)
-    patch.set_alpha(0.7)
-axes[1].set_title("Semantic Similarity to Ground Truth", fontweight="bold")
-axes[1].set_ylabel("Cosine Similarity")
-
-plt.suptitle("Score Distributions Across Conditions", fontsize=14, fontweight="bold", y=1.02)
-plt.tight_layout()
-plt.savefig(os.path.join(FIGURES_DIR, "fig2_box_distributions.png"), bbox_inches="tight")
-plt.close()
-log("  Saved: fig2_box_distributions.png")
+if __name__ == "__main__":
+    main()
 
 
 # ── Figure 3: SCE Score Distribution (Histogram) ────────────────────────
