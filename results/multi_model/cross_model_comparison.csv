@@ -1,0 +1,4 @@
+Model,Parameters,Architecture,Baseline ROUGE-L,RAG ROUGE-L,Improvement (%),Baseline Sem.Sim,RAG Sem.Sim,Halluc. Rate,SCE F1,p-value (ROUGE-L),Cohen's d
+Flan-T5-Small (77M),flan-t5-small,Encoder-Decoder,0.0879,0.3569,305.9,0.2557,0.4576,49.1%,0.709,1.19e-76,0.814
+Flan-T5-Base (250M),flan-t5-base,Encoder-Decoder,0.0872,0.2622,200.8,0.292,0.3532,64.7%,0.673,3.08e-67,0.74
+Qwen2.5-0.5B (500M),qwen2.5-0.5b,Decoder-Only,0.0991,0.5107,415.3,0.5305,0.7041,17.0%,0.544,1.46e-114,1.164
