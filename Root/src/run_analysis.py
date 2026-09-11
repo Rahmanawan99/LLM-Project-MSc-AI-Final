@@ -46,6 +46,12 @@ log(f"Baseline rows: {len(baseline_df)}")
 log(f"RAG rows: {len(rag_df)}")
 log(f"SCE rows: {len(sce_df)}")
 
+if not (
+    baseline_df["question"].equals(rag_df["question"])
+    and baseline_df["question"].equals(sce_df["question"])
+):
+    raise ValueError("Baseline, RAG, and SCE result files must contain questions in the same order")
+
 try:
     from datasets import load_dataset
 
@@ -56,6 +62,9 @@ except Exception as exc:
     log(f"Could not load TruthfulQA categories: {exc}")
     HAS_CATEGORIES = False
     tqa_df = None
+
+if HAS_CATEGORIES and not baseline_df["question"].equals(tqa_df["question"]):
+    raise ValueError("Result questions do not match the TruthfulQA validation order")
 
 for df in [baseline_df, rag_df, sce_df]:
     for col in df.columns:

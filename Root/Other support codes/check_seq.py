@@ -1,8 +1,15 @@
-import sys, io
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+import argparse
+import io
+import sys
+
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 from docx import Document
 
-doc = Document(r'c:\Users\rahma\Documents\Playground\LLM-Project\DMUD_MSC_Thesis-Final_v1.3.docx')
+parser = argparse.ArgumentParser(description="Check the sequence of tables and figures in a Word document")
+parser.add_argument("document", help="Path to the .docx document")
+args = parser.parse_args()
+
+doc = Document(args.document)
 
 body = doc._body._element
 print("=== APPENDIX SEQUENCE OF ELEMENTS ===")

@@ -245,6 +245,12 @@ def compute_metrics_for_model(model_label):
     rag_df = pd.read_csv(os.path.join(MULTI_DIR, f"{model_label}_rag_results.csv"))
     sce_df = pd.read_csv(os.path.join(MULTI_DIR, f"{model_label}_sce_results.csv"))
 
+    if not (
+        baseline_df["question"].equals(rag_df["question"])
+        and baseline_df["question"].equals(sce_df["question"])
+    ):
+        raise ValueError(f"{model_label} result files must contain questions in the same order")
+
     for df in [baseline_df, rag_df, sce_df]:
         for column in df.columns:
             if df[column].dtype == object:

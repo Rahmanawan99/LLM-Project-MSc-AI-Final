@@ -1,6 +1,0 @@
-pip install pandas numpy matplotlib jupyter
-pip install transformers torch sentence-transformers datasets
-pip install langchain faiss-cpu
-pip install scikit-learn bert-score
-pip install sentencepiece
-pip install huggingface_hub
