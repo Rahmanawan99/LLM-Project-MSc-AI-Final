@@ -1,0 +1,38 @@
+[
+  {
+    "id": "menu_burgers",
+    "text": "Burger Haven Menu - Burgers: Classic Beef Burger ($5.00), Double Cheese Burger ($7.00), Spicy Chicken Burger ($6.00), Vegan Black Bean Burger ($6.50). All burgers come with lettuce, tomato, and our signature Haven Sauce."
+  },
+  {
+    "id": "menu_sides",
+    "text": "Burger Haven Menu - Sides & Drinks: Crispy French Fries ($3.00), Onion Rings ($4.00), Sweet Potato Fries ($4.50). Drinks: Cola ($2.00), Lemonade ($2.50), Vanilla Milkshake ($4.00)."
+  },
+  {
+    "id": "hours",
+    "text": "Burger Haven Operating Hours: Monday to Friday from 10:00 AM to 10:00 PM. Saturday and Sunday from 11:00 AM to 11:30 PM. We are closed on National Public Holidays."
+  },
+  {
+    "id": "location_contact",
+    "text": "Burger Haven Location and Contact: We are located at 123 Foodie Avenue, Downtown Dubai. Contact us at +971-50-1234567 or email hello@burgerhaven.ae."
+  },
+  {
+    "id": "policy_meat",
+    "text": "Burger Haven Policies: We use 100% locally sourced Halal meat for all our beef and chicken burgers."
+  },
+  {
+    "id": "policy_delivery",
+    "text": "Burger Haven Policies: We offer free delivery for orders above $20.00 within a 5km radius."
+  },
+  {
+    "id": "policy_refunds",
+    "text": "Burger Haven Policies: There are no refunds on customized orders unless there is a quality issue with the food."
+  },
+  {
+    "id": "policy_menu_restrictions",
+    "text": "Burger Haven Policies: We specialize strictly in burgers and fries. We do not sell pizza, hotdogs, or seafood."
+  },
+  {
+    "id": "allergens",
+    "text": "Allergen Information: Our buns contain gluten and dairy. The Vegan Burger is strictly plant-based and cooked on a separate grill. Haven Sauce contains eggs and mustard. Please inform staff of any severe peanut allergies, as our facility processes nuts."
+  }
+]

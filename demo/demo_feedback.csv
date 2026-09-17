@@ -1,0 +1,2 @@
+timestamp,model,question,rag_answer,sce_score,sce_flagged,user_feedback
+2026-09-11T12:44:03.765025,Flan-T5-Small (77M),Can i get a cheese pizza?,No,0.09682496637105942,True,Consistent
